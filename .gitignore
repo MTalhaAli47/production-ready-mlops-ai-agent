@@ -10,3 +10,8 @@ airflow/logs/
 data/processed/
 .DS_Store
 .vscode/
+
+# Python packaging
+*.egg-info/
+build/
+dist/
