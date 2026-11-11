@@ -7,7 +7,6 @@ __pycache__/
 *.log
 mlruns/
 airflow/logs/
-data/raw/
 data/processed/
 .DS_Store
 .vscode/
