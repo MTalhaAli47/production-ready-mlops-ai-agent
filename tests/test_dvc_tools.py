@@ -187,3 +187,84 @@ def test_run_handles_missing_executable(monkeypatch):
         "success": False,
         "error": "Required executable not found",
     }
+
+
+def test_run_handles_nonzero_exit_code(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        dvc_tools.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=1,
+            stderr="DVC operation failed",
+            stdout="",
+        ),
+    )
+
+    result = dvc_tools._run(["dvc", "status"])
+
+    assert result == {
+        "success": False,
+        "error": "DVC operation failed",
+    }
+
+
+def test_list_datasets_handles_invalid_metadata_structure(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dvc_tools, "PROJECT_ROOT", tmp_path)
+
+    metadata = tmp_path / "invalid.dvc"
+    metadata.write_text("outs: invalid\n")
+
+    result = dvc_tools.list_datasets()
+
+    assert result["success"] is True
+    assert len(result["datasets"]) == 1
+    assert "error" in result["datasets"][0]
+    assert "outs" in result["datasets"][0]["error"]
+
+
+def test_get_dataset_provenance_handles_git_failure(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dvc_tools, "PROJECT_ROOT", tmp_path)
+
+    metadata = tmp_path / "data" / "sample.csv.dvc"
+    metadata.parent.mkdir()
+    metadata.write_text(
+        yaml.safe_dump({"outs": [{"path": "sample.csv"}]})
+    )
+
+    monkeypatch.setattr(
+        dvc_tools,
+        "_run",
+        lambda command: {
+            "success": False,
+            "error": "Git repository unavailable",
+        },
+    )
+
+    result = dvc_tools.get_dataset_provenance("data/sample.csv")
+
+    assert result["success"] is False
+    assert result["error"] == "Git repository unavailable"
+
+
+def test_compare_dataset_versions_handles_invalid_json(monkeypatch):
+    monkeypatch.setattr(
+        dvc_tools,
+        "_run",
+        lambda command: {
+            "success": True,
+            "output": "Unexpected DVC output",
+        },
+    )
+
+    result = dvc_tools.compare_dataset_versions("HEAD~1", "HEAD")
+
+    assert result["success"] is True
+    assert result["comparison"] == {
+        "raw_output": "Unexpected DVC output"
+    }
