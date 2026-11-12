@@ -16,3 +16,8 @@ data/processed/
 build/
 dist/
 dvc_storage/
+
+# Test coverage
+.coverage
+.coverage.*
+htmlcov/
