@@ -268,3 +268,157 @@ def test_compare_dataset_versions_handles_invalid_json(monkeypatch):
     assert result["comparison"] == {
         "raw_output": "Unexpected DVC output"
     }
+
+
+# Additional tests targeting previously uncovered execution paths.
+
+
+def test_validate_dataset_file_rejects_empty_and_non_string_paths():
+    assert dvc_tools._validate_dataset_file("") is None
+    assert dvc_tools._validate_dataset_file("   ") is None
+    assert dvc_tools._validate_dataset_file(None) is None
+    assert dvc_tools._validate_dataset_file(123) is None
+
+
+def test_validate_dataset_file_rejects_windows_separators():
+    assert dvc_tools._validate_dataset_file(
+        r"data\training_data.csv"
+    ) is None
+
+
+def test_validate_dataset_file_rejects_symlink_escape(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dvc_tools, "PROJECT_ROOT", tmp_path)
+
+    outside = tmp_path.parent / "outside_dataset.csv"
+    outside.write_text("id,value\n1,100\n")
+
+    link = tmp_path / "dataset.csv"
+    link.symlink_to(outside)
+
+    assert dvc_tools._validate_dataset_file("dataset.csv") is None
+
+
+def test_get_metadata_path_rejects_symlink_escape(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dvc_tools, "PROJECT_ROOT", tmp_path)
+
+    outside = tmp_path.parent / "outside.csv.dvc"
+    outside.write_text("outs: []\n")
+
+    metadata = tmp_path / "data" / "sample.csv.dvc"
+    metadata.parent.mkdir()
+    metadata.symlink_to(outside)
+
+    assert dvc_tools._get_metadata_path("data/sample.csv") is None
+
+
+def test_run_handles_successful_command(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        dvc_tools.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0,
+            stdout="DVC operation successful\n",
+            stderr="",
+        ),
+    )
+
+    result = dvc_tools._run(["dvc", "status"])
+
+    assert result == {
+        "success": True,
+        "output": "DVC operation successful",
+    }
+
+
+def test_list_datasets_skips_non_file_metadata(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dvc_tools, "PROJECT_ROOT", tmp_path)
+
+    broken_link = tmp_path / "broken.dvc"
+    broken_link.symlink_to(tmp_path / "missing.dvc")
+
+    result = dvc_tools.list_datasets()
+
+    assert result["success"] is True
+    assert result["datasets"] == []
+
+
+def test_list_datasets_skips_excluded_directories(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dvc_tools, "PROJECT_ROOT", tmp_path)
+
+    excluded = tmp_path / ".venv"
+    excluded.mkdir()
+
+    (excluded / "ignored.dvc").write_text(
+        "outs:\n  - path: ignored.csv\n"
+    )
+
+    result = dvc_tools.list_datasets()
+
+    assert result["success"] is True
+    assert result["datasets"] == []
+
+
+def test_list_datasets_rejects_non_mapping_metadata(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dvc_tools, "PROJECT_ROOT", tmp_path)
+
+    metadata = tmp_path / "invalid.dvc"
+    metadata.write_text("- invalid\n- metadata\n")
+
+    result = dvc_tools.list_datasets()
+
+    assert result["success"] is True
+    assert len(result["datasets"]) == 1
+    assert "error" in result["datasets"][0]
+    assert "mapping" in result["datasets"][0]["error"]
+
+
+def test_list_datasets_handles_invalid_output_entries(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dvc_tools, "PROJECT_ROOT", tmp_path)
+
+    metadata = tmp_path / "invalid_output.dvc"
+    metadata.write_text(
+        yaml.safe_dump({
+            "outs": [
+                "invalid-entry",
+                {"md5": "missing-path"},
+                {"path": 123},
+            ]
+        })
+    )
+
+    result = dvc_tools.list_datasets()
+
+    assert result["success"] is True
+    assert len(result["datasets"]) == 3
+
+    for dataset in result["datasets"]:
+        assert dataset["error"] == "Invalid DVC output entry"
+
+
+def test_get_dataset_provenance_rejects_non_mapping_metadata(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dvc_tools, "PROJECT_ROOT", tmp_path)
+
+    metadata = tmp_path / "data" / "sample.csv.dvc"
+    metadata.parent.mkdir()
+    metadata.write_text("- invalid\n- metadata\n")
+
+    result = dvc_tools.get_dataset_provenance("data/sample.csv")
+
+    assert result["success"] is False
+    assert "mapping" in result["error"]
