@@ -21,3 +21,8 @@ dvc_storage/
 .coverage
 .coverage.*
 htmlcov/
+
+# MLflow tracking database and generated artifacts
+mlflow.db
+mlflow.db-*
+mlartifacts/

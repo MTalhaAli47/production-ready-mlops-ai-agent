@@ -1,0 +1,27 @@
+{
+  "success": true,
+  "experiment_name": "student-pass-prediction",
+  "run_id": "f813a10421fc4052902b876891e4b44a",
+  "model_uri": "models:/m-c826a253fa7342ed9a813ef6745be891",
+  "dataset_rows": 9,
+  "cross_validation_metrics": {
+    "cv_accuracy_mean": 0.8888888888888888,
+    "cv_accuracy_std": 0.15713484026367724,
+    "cv_precision_mean": 0.8888888888888888,
+    "cv_precision_std": 0.15713484026367724,
+    "cv_recall_mean": 1.0,
+    "cv_recall_std": 0.0,
+    "cv_f1_mean": 0.9333333333333332,
+    "cv_f1_std": 0.09428090415820632,
+    "cv_roc_auc_mean": 1.0,
+    "cv_roc_auc_std": 0.0
+  },
+  "dataset_provenance": {
+    "dataset_path": "data/raw/training_data.csv",
+    "dataset_git_revision": "a6fdb8cf2e83b248eebb361a0c028192d4ce3dea",
+    "dataset_dvc_hash": "0df62c20a14cee0d7c0f1755eafb00ff",
+    "dataset_dvc_metadata_path": "data/raw/training_data.csv.dvc",
+    "dataset_version": "md5:0df62c20a14cee0d7c0f1755eafb00ff"
+  },
+  "warning": "Only nine dataset rows are available. Metrics are for demonstration, not reliable estimates of real-world generalization."
+}
