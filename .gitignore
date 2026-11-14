@@ -26,3 +26,5 @@ htmlcov/
 mlflow.db
 mlflow.db-*
 mlartifacts/
+
+airflow/config/airflow.cfg
