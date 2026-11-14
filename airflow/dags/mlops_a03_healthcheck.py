@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from airflow.sdk import dag, task
 
@@ -6,7 +6,7 @@ from airflow.sdk import dag, task
 @dag(
     dag_id="mlops_a03_healthcheck",
     description="Non-destructive Airflow infrastructure health check",
-    start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    start_date=datetime(2026, 1, 1, tzinfo=UTC),
     schedule=None,
     catchup=False,
     tags=["mlops-a03", "healthcheck"],

@@ -1,0 +1,13 @@
+{
+  "model_id": "m-c826a253fa7342ed9a813ef6745be891",
+  "source_run_id": "f813a10421fc4052902b876891e4b44a",
+  "experiment_name": "student-pass-prediction",
+  "artifact_format": "skops",
+  "training_dataset_rows": 9,
+  "features": [
+    "hours_studied",
+    "attendance",
+    "previous_score"
+  ],
+  "classes": [0, 1]
+}
