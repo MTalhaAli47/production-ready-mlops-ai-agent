@@ -1,5 +1,6 @@
 """Gemini-powered natural-language interface for read-only MLOps diagnostics."""
 
+import logging
 import os
 import sys
 
@@ -196,6 +197,10 @@ def answer_question(question, client=None, diagnostics_runner=None):
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     load_dotenv()
 
     if len(sys.argv) > 1:

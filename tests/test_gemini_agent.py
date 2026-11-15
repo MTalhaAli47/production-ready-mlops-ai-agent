@@ -433,7 +433,13 @@ def test_main_uses_command_line_question(monkeypatch, capsys):
     gemini_main = importlib.import_module("agent.main")
     load_dotenv = Mock()
     answer = Mock(return_value="CLI response")
+    configure_logging = Mock()
 
+    monkeypatch.setattr(
+        gemini_main.logging,
+        "basicConfig",
+        configure_logging,
+    )
     monkeypatch.setattr(gemini_main, "load_dotenv", load_dotenv)
     monkeypatch.setattr(gemini_main, "answer_question", answer)
     monkeypatch.setattr(
@@ -444,6 +450,10 @@ def test_main_uses_command_line_question(monkeypatch, capsys):
 
     gemini_main.main()
 
+    configure_logging.assert_called_once_with(
+        level=gemini_main.logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s %(message)s",
+    )
     load_dotenv.assert_called_once_with()
     answer.assert_called_once_with("Check deployment health")
     assert capsys.readouterr().out == "CLI response\n"
