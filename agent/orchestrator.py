@@ -1,8 +1,10 @@
 """Deterministic orchestration for cross-system MLOps diagnostics."""
 
+import logging
 import math
 import os
 import time
+import uuid
 from datetime import UTC, datetime
 from urllib.parse import urlsplit
 
@@ -20,6 +22,8 @@ from agent.tools.mlflow_tools import (
     get_run_dataset_provenance,
     list_runs,
 )
+
+logger = logging.getLogger(__name__)
 
 INFERENCE_API_TIMEOUT_SECONDS = 3
 HEALTHCHECK_DAG_ID = "mlops_a03_healthcheck"
@@ -350,6 +354,7 @@ def _run_read_only_tool(function, source: str, **kwargs) -> ToolResult:
 def run_diagnostics(now: datetime | None = None) -> DiagnosticReport:
     """Collect read-only diagnostics across the MLOps platform."""
     generated_at = datetime.now(UTC)
+    request_id = uuid.uuid4().hex
     findings: list[DiagnosticFinding] = []
     recommendations: list[str] = []
 
@@ -649,6 +654,17 @@ def run_diagnostics(now: datetime | None = None) -> DiagnosticReport:
         overall_status = "failed"
     else:
         overall_status = "partial"
+
+    for name, result in subsystem_results.items():
+        logger.info(
+            "Diagnostic subsystem completed",
+            extra={
+                "request_id": request_id,
+                "tool_name": name,
+                "status": result.status,
+                "duration_ms": result.duration_ms,
+            },
+        )
 
     return DiagnosticReport(
         generated_at=generated_at,

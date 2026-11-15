@@ -1,5 +1,6 @@
 """Tests for deterministic MLOps orchestration."""
 
+import logging
 from datetime import UTC, datetime, timedelta
 from unittest.mock import Mock
 
@@ -365,7 +366,7 @@ def test_select_best_recent_model_handles_unexpected_run_data(monkeypatch):
     assert result.data["excluded_runs"]["missing_or_invalid_f1"] == 1
 
 
-def test_run_diagnostics_all_checks_succeed(monkeypatch):
+def test_run_diagnostics_all_checks_succeed(monkeypatch, caplog):
     checked_at = orchestrator.datetime(2026, 11, 15, tzinfo=orchestrator.UTC)
     calls = []
 
@@ -484,7 +485,38 @@ def test_run_diagnostics_all_checks_succeed(monkeypatch):
         ),
     )
 
+    caplog.set_level(logging.INFO, logger="agent.orchestrator")
     report = orchestrator.run_diagnostics(now=checked_at)
+
+    log_records = [
+        record
+        for record in caplog.records
+        if record.getMessage() == "Diagnostic subsystem completed"
+    ]
+    assert len(log_records) == 6
+    request_ids = {record.request_id for record in log_records}
+    assert len(request_ids) == 1
+    assert next(iter(request_ids))
+    assert {record.tool_name for record in log_records} == {
+        "model_selection",
+        "training_provenance",
+        "dataset_state",
+        "airflow",
+        "kubernetes",
+        "inference_api",
+    }
+    results = {
+        "model_selection": report.model_selection,
+        "training_provenance": report.training_provenance,
+        "dataset_state": report.dataset_state,
+        "airflow": report.airflow,
+        "kubernetes": report.kubernetes,
+        "inference_api": report.inference_api,
+    }
+    for record in log_records:
+        result = results[record.tool_name]
+        assert record.status == result.status
+        assert record.duration_ms == result.duration_ms
 
     assert report.overall_status == "complete"
     assert report.model_selection.status == "success"
