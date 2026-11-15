@@ -140,3 +140,32 @@ Production adoption would require environment-specific security review,
 credential management, infrastructure hardening, monitoring, access
 control, operational procedures, representative model evaluation, and
 reliability testing.
+
+## Gemini independent dispatcher limitations
+
+The current Gemini dispatcher exposes a deliberately limited set of 13
+read-only functions. It supports focused DVC, MLflow, Airflow, and Kubernetes
+inspection, as well as the cross-subsystem `run_diagnostics` coordinator.
+It does not provide arbitrary tool discovery or execution.
+
+The independent dispatcher has been tested locally with mocked Gemini
+responses and tool implementations. Its function allowlist, configuration,
+argument validation, rejection paths, and selected-only dispatch are covered
+by automated tests. **Independent tool selection has not yet been
+live-verified against the Gemini API.** Existing coordinator-based live demos
+do not establish that the new independent selections work end to end.
+
+Live operation requires a valid locally configured API key, network access,
+and availability of the configured Gemini model. Gemini's natural-language
+explanation should be checked against the underlying tool evidence; it is not
+a substitute for the returned operational facts.
+
+The exposed tool set intentionally excludes state-changing operations,
+sensitive task/pod log retrieval, and arbitrary commands. Kubernetes
+inspection is restricted to the approved `mlops-a03` namespace. Local
+argument validation, result sanitization, and output-size bounds reduce risk
+but do not make the model's explanation infallible.
+
+The training dataset still contains only nine rows. Metrics from this dataset
+are limited evidence and do not establish reliable generalization or
+production readiness.

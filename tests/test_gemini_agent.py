@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 from google.genai import types
 
-from agent.main import answer_question
+from agent.main import _format_api_error, answer_question
 from agent.schemas import DiagnosticReport, ToolResult
 
 
@@ -74,6 +74,39 @@ def test_answer_question_runs_diagnostics_once_and_returns_explanation(monkeypat
     assert client.models.generate_content.call_count == 2
     first_call = client.models.generate_content.call_args_list[0]
     assert first_call.kwargs["model"] == "gemini-3.5-flash-lite"
+
+    config = first_call.kwargs["config"]
+    calling_config = config.tool_config.function_calling_config
+    assert calling_config.mode == "ANY"
+    assert set(calling_config.allowed_function_names) == {
+        "run_diagnostics",
+        "list_datasets",
+        "get_dataset_provenance",
+        "check_dataset_changes",
+        "list_experiments",
+        "list_runs",
+        "get_run_details",
+        "list_dags",
+        "get_dag_details",
+        "list_dag_runs",
+        "list_pods",
+        "get_pod_details",
+        "list_deployments",
+    }
+
+    declared_names = {
+        declaration.name
+        for tool in config.tools
+        for declaration in tool.function_declarations
+    }
+    assert declared_names == set(calling_config.allowed_function_names)
+    assert not declared_names.intersection({
+        "trigger_dag",
+        "reproduce_dataset",
+        "get_pod_logs",
+        "get_task_logs",
+    })
+
     second_call = client.models.generate_content.call_args_list[1]
     assert second_call.kwargs["config"].tools is None
 
@@ -494,3 +527,61 @@ def test_module_entry_point_executes_main(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
 
     runpy.run_path(str(source_path), run_name="__main__")
+
+
+def test_api_error_formatter_classifies_safe_http_statuses():
+    from google.genai import errors
+
+    cases = {
+        400: "HTTP 400",
+        401: "HTTP 401",
+        403: "HTTP 403",
+        404: "HTTP 404",
+        429: "HTTP 429",
+        503: "HTTP 503",
+    }
+
+    for status_code, expected in cases.items():
+        error = errors.APIError(
+            status_code,
+            {"error": {"message": "sensitive simulated server response"}},
+        )
+        answer = _format_api_error(error)
+
+        assert expected in answer
+        assert "sensitive simulated server response" not in answer
+
+
+def test_api_error_formatter_never_exposes_server_supplied_text():
+    from google.genai import errors
+
+    error = errors.APIError(
+        403,
+        {
+            "error": {
+                "status": "SECRET_STATUS_VALUE",
+                "message": "SECRET_MESSAGE_VALUE",
+                "details": "SECRET_DETAILS_VALUE",
+            }
+        },
+    )
+
+    answer = _format_api_error(error)
+
+    assert "HTTP 403" in answer
+    assert "SECRET_STATUS_VALUE" not in answer
+    assert "SECRET_MESSAGE_VALUE" not in answer
+    assert "SECRET_DETAILS_VALUE" not in answer
+
+
+def test_api_error_formatter_rejects_invalid_status_codes():
+    class InvalidStatusError(Exception):
+        def __init__(self, code):
+            self.code = code
+
+    fallback = (
+        "Gemini API request failed. Check the model configuration and try again."
+    )
+
+    for code in (None, True, False, 99, 600, "403", 403.0):
+        assert _format_api_error(InvalidStatusError(code)) == fallback

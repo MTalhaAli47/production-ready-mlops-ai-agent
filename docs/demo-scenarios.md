@@ -155,3 +155,41 @@ not make an automatic retraining decision based on those metrics alone.
 - [ ] Recommendations are supported by the diagnostic report.
 - [ ] No mutation or retraining action is initiated by the diagnostic agent.
 - [ ] The nine-row dataset limitation is disclosed when discussing model quality.
+
+## Independent Gemini tool-selection scenarios
+
+The dispatcher adds focused read-only scenarios alongside the existing
+coordinator-based Gemini demonstrations.
+
+| Area | Example request | Expected selection |
+| --- | --- | --- |
+| DVC | List available datasets | `list_datasets` |
+| DVC | Show provenance for the training dataset | `get_dataset_provenance` |
+| DVC | Check whether the dataset has local or remote changes | `check_dataset_changes` |
+| MLflow | List experiments | `list_experiments` |
+| MLflow | List runs for an experiment | `list_runs` |
+| MLflow | Inspect a specific run | `get_run_details` |
+| Airflow | List DAGs | `list_dags` |
+| Airflow | Inspect a DAG or its runs | `get_dag_details` or `list_dag_runs` |
+| Kubernetes | List pods in the approved namespace | `list_pods` |
+| Kubernetes | Inspect a pod or list deployments | `get_pod_details` or `list_deployments` |
+| Cross-subsystem | Summarize the overall MLOps environment | `run_diagnostics` |
+
+Requests to trigger DAGs, reproduce datasets, mutate Kubernetes resources,
+retrieve sensitive logs, or perform other state-changing operations must not
+be dispatched.
+
+### Verification status
+
+The independent dispatcher and its configuration are covered by local
+automated tests using mocks. These tests verify the fixed allowlist, function
+selection and argument validation, selected-only dispatch, rejection of
+invalid calls, and exclusion of representative mutating or sensitive tools.
+
+These scenarios are not yet evidence of live independent tool selection
+through the Gemini API. Mark them as **automated/local test coverage** until a
+live demonstration has been explicitly approved and completed.
+
+The existing five coordinator-based Gemini demonstrations remain the
+previously captured live evidence. They do not, by themselves, demonstrate
+independent selection of the newly exposed functions.

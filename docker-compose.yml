@@ -2,7 +2,10 @@
 # Learning/development configuration only; not production-hardened.
 
 x-airflow-common: &airflow-common
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:3.4.0}
+  image: mlops-a03-airflow:3.4.0
+  build:
+    context: .
+    dockerfile: docker/Dockerfile.airflow
   env_file:
     - .env
   environment: &airflow-common-env
@@ -17,12 +20,18 @@ x-airflow-common: &airflow-common
     AIRFLOW__API_AUTH__JWT_ISSUER: airflow
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
     AIRFLOW_CONFIG: /opt/airflow/config/airflow.cfg
+    PYTHONPATH: /opt/mlops-project
+    GIT_OPTIONAL_LOCKS: "0"
     _PIP_ADDITIONAL_REQUIREMENTS: ""
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - ./airflow/config:/opt/airflow/config
     - ./airflow/plugins:/opt/airflow/plugins
+    - ./.git:/opt/mlops-project/.git:ro
+    - ./data/raw:/opt/mlops-project/data/raw:ro
+    - ./training:/opt/mlops-project/training:ro
+    - airflow-training-workspace:/opt/mlops-workspace
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     postgres:
@@ -64,6 +73,8 @@ services:
             --email airflow@example.com \
             --password "$${_AIRFLOW_WWW_USER_PASSWORD}"
         fi
+        mkdir -p /opt/mlops-workspace
+        chown -R "$${AIRFLOW_UID:-50000}:0" /opt/mlops-workspace
         chown -R "$${AIRFLOW_UID:-50000}:0" /opt/airflow
         echo "Airflow database and initialization completed."
     environment:
@@ -144,3 +155,4 @@ services:
 
 volumes:
   postgres-db-volume:
+  airflow-training-workspace:

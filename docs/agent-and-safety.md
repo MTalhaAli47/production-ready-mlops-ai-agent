@@ -137,3 +137,55 @@ the subsystem is permanently broken.
 Likewise, a high model metric on the nine-row demonstration dataset does
 not establish generalization or production readiness. Gemini must not
 interpret that metric alone as evidence that retraining is unnecessary.
+
+## Current Gemini dispatcher: independent read-only tools
+
+The current Gemini integration exposes a fixed allowlist of 13 read-only
+functions. It supports both focused inspection and the cross-subsystem
+coordinator:
+
+- Coordinator: `run_diagnostics`.
+- DVC: `list_datasets`, `get_dataset_provenance`,
+  `check_dataset_changes`.
+- MLflow: `list_experiments`, `list_runs`, `get_run_details`.
+- Airflow: `list_dags`, `get_dag_details`, `list_dag_runs`.
+- Kubernetes: `list_pods`, `get_pod_details`, `list_deployments`.
+
+The earlier coordinator-only description documents the original implementation
+and is superseded by this dispatcher design.
+
+### Function selection and execution boundary
+
+Gemini is configured with function-calling mode `ANY` and the explicit
+13-function allowlist. Each request must produce exactly one approved function
+call. The application rejects zero, multiple, unknown, malformed, or incomplete
+calls.
+
+The application independently validates arguments before dispatch. Validation
+covers required and unknown fields, types, bounds, identifier formats,
+approved fixed values, and conflicting selectors. SDK schemas are an
+additional interface constraint, not a security boundary.
+
+Only the selected, locally registered callable is executed. The dispatcher
+does not evaluate model-generated code, import model-selected modules, execute
+shell commands, or accept arbitrary operations. The coordinator remains
+available for questions requiring a cross-subsystem diagnostic overview; it
+is no longer the only way to retrieve operational facts.
+
+Tool results are sanitized before being returned to Gemini. Sensitive
+dictionary keys are redacted, nested collections and strings are bounded, and
+serialized tool results are limited to 30,000 characters. The final
+natural-language explanation is generated after the tool response, without
+exposing another tool-selection opportunity.
+
+### Scope exclusions
+
+The allowlist deliberately excludes state-changing operations, including
+Airflow DAG triggering, DVC reproduction, Kubernetes mutations, and MLflow
+registry or deletion operations. Sensitive task and pod log retrieval is also
+excluded. Kubernetes access is restricted to the approved `mlops-a03`
+namespace.
+
+Existing credential-handling and logging restrictions remain in force:
+credentials and API keys must remain local and must not appear in logs,
+screenshots, reports, or source control.
