@@ -318,11 +318,9 @@ def _tool_response_result(response, source: str) -> ToolResult:
         )
 
     if not response["success"]:
-        error = response.get("error")
         return ToolResult(
             status="failed",
-            data=response,
-            error=error if isinstance(error, str) else f"{source} operation failed",
+            error=f"{source} operation failed",
             checked_at=checked_at,
         )
 
@@ -379,6 +377,75 @@ def run_diagnostics(now: datetime | None = None) -> DiagnosticReport:
             status="skipped",
             error="Skipped because no qualifying model run was selected",
             checked_at=datetime.now(UTC),
+        )
+
+    # Normalize successful provenance responses before report aggregation.
+    if training_provenance.status == "success":
+        raw_data = training_provenance.data
+        raw_data = raw_data if isinstance(raw_data, dict) else {}
+
+        provenance_fields = (
+            "dataset_path",
+            "dataset_git_revision",
+            "dataset_dvc_hash",
+            "dataset_dvc_metadata_path",
+            "dataset_version",
+        )
+        raw_provenance = raw_data.get("provenance")
+        provenance_is_valid = isinstance(raw_provenance, dict)
+        raw_provenance = (
+            raw_provenance if provenance_is_valid else {}
+        )
+
+        raw_missing_tags = raw_data.get("missing_tags")
+        missing_tags_are_valid = isinstance(raw_missing_tags, list)
+        allowed_missing = (
+            {
+                tag
+                for tag in raw_missing_tags
+                if isinstance(tag, str) and tag in provenance_fields
+            }
+            if missing_tags_are_valid
+            else set(provenance_fields)
+        )
+
+        sanitized_provenance = {}
+        missing_tags = []
+        malformed_values = False
+
+        for tag in provenance_fields:
+            value = raw_provenance.get(tag)
+            if isinstance(value, str) and value.strip():
+                sanitized_provenance[tag] = value
+            else:
+                sanitized_provenance[tag] = None
+                if value is not None:
+                    malformed_values = True
+
+            if tag in allowed_missing or sanitized_provenance[tag] is None:
+                missing_tags.append(tag)
+
+        malformed_response = (
+            not provenance_is_valid
+            or not missing_tags_are_valid
+            or malformed_values
+        )
+        training_provenance = ToolResult(
+            status="partial" if malformed_response else "success",
+            data={
+                "success": True,
+                "run_id": run_id,
+                "provenance": sanitized_provenance,
+                "complete": not missing_tags,
+                "missing_tags": missing_tags,
+            },
+            error=(
+                "MLflow returned malformed training provenance."
+                if malformed_response
+                else None
+            ),
+            checked_at=training_provenance.checked_at,
+            duration_ms=training_provenance.duration_ms,
         )
 
     # 3. Check current DVC state independently of model selection.
@@ -469,7 +536,11 @@ def run_diagnostics(now: datetime | None = None) -> DiagnosticReport:
         if airflow_status != "success":
             airflow = ToolResult(
                 status=airflow_status,
-                data=airflow.data,
+                data=(
+                    None
+                    if not isinstance(dag_runs, list)
+                    else airflow.data
+                ),
                 error=airflow_error,
                 checked_at=airflow.checked_at,
                 duration_ms=airflow.duration_ms,

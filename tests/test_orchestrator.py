@@ -403,9 +403,13 @@ def test_run_diagnostics_all_checks_succeed(monkeypatch, caplog):
                 "success": True,
                 "run_id": "run-123",
                 "complete": True,
+                "missing_tags": [],
                 "provenance": {
                     "dataset_path": "data/raw/training_data.csv",
-                    "dataset_version": "md5:abc123",
+                    "dataset_git_revision": "a6fdb8cf2e83b248e8ebb361a0c028192d4ce3dea",
+                    "dataset_dvc_hash": "0df62c20a14cee0d7c0f1755eafb00ff",
+                    "dataset_dvc_metadata_path": "data/raw/training_data.csv.dvc",
+                    "dataset_version": "md5:0df62c20a14cee0d7c0f1755eafb00ff",
                 },
             },
         ),
@@ -522,7 +526,7 @@ def test_run_diagnostics_all_checks_succeed(monkeypatch, caplog):
     assert report.model_selection.status == "success"
     assert report.training_provenance.status == "success"
     assert report.training_provenance.data["provenance"]["dataset_version"] == (
-        "md5:abc123"
+        "md5:0df62c20a14cee0d7c0f1755eafb00ff"
     )
     assert report.dataset_state.status == "success"
     assert report.airflow.status == "success"
@@ -681,10 +685,17 @@ def test_run_diagnostics_warns_about_incomplete_provenance(monkeypatch):
             "success": True,
             "run_id": "run-incomplete",
             "complete": False,
-            "missing_tags": ["dataset_dvc_hash"],
+            "missing_tags": [
+                "dataset_dvc_hash",
+                "PRIVATE_INTERNAL_DETAIL",
+                123,
+            ],
             "provenance": {
                 "dataset_path": "data/raw/training_data.csv",
-                "dataset_version": None,
+                "dataset_git_revision": "a6fdb8cf2e83b248e8ebb361a0c028192d4ce3dea",
+                "dataset_dvc_hash": None,
+                "dataset_dvc_metadata_path": "data/raw/training_data.csv.dvc",
+                "dataset_version": "md5:0df62c20a14cee0d7c0f1755eafb00ff",
             },
         },
     )
@@ -749,6 +760,17 @@ def test_run_diagnostics_warns_about_incomplete_provenance(monkeypatch):
     assert report.training_provenance.data["missing_tags"] == [
         "dataset_dvc_hash"
     ]
+    assert (
+        report.training_provenance.data["provenance"]["dataset_dvc_hash"]
+        is None
+    )
+    assert (
+        report.training_provenance.data["provenance"]["dataset_path"]
+        == "data/raw/training_data.csv"
+    )
+    serialized_report = report.model_dump_json()
+    assert "PRIVATE_INTERNAL_DETAIL" not in serialized_report
+    assert "123" not in serialized_report
 
     provenance_warnings = [
         finding
@@ -763,6 +785,39 @@ def test_run_diagnostics_warns_about_incomplete_provenance(monkeypatch):
         "missing training provenance" in recommendation.lower()
         for recommendation in report.recommendations
     )
+
+    sensitive_payload = "PRIVATE_MALFORMED_PROVENANCE_PAYLOAD"
+    monkeypatch.setattr(
+        orchestrator,
+        "get_run_dataset_provenance",
+        lambda **kwargs: {
+            "success": True,
+            "run_id": "run-incomplete",
+            "complete": True,
+            "missing_tags": [],
+            "provenance": sensitive_payload,
+        },
+    )
+
+    malformed_report = orchestrator.run_diagnostics(now=checked_at)
+    normalized = malformed_report.training_provenance
+
+    assert normalized.status == "partial"
+    assert normalized.error == (
+        "MLflow returned malformed training provenance."
+    )
+    assert normalized.data["complete"] is False
+    assert normalized.data["missing_tags"] == [
+        "dataset_path",
+        "dataset_git_revision",
+        "dataset_dvc_hash",
+        "dataset_dvc_metadata_path",
+        "dataset_version",
+    ]
+    assert all(
+        value is None for value in normalized.data["provenance"].values()
+    )
+    assert sensitive_payload not in malformed_report.model_dump_json()
 
 
 def test_run_diagnostics_warns_when_dvc_reports_local_changes(monkeypatch):
@@ -914,3 +969,407 @@ def test_run_diagnostics_accepts_clean_dvc_state(monkeypatch):
         finding.source == "dataset_state" and finding.severity == "warning"
         for finding in report.findings
     )
+
+
+def test_read_only_tool_contains_expected_exception_without_leaking_message():
+    def failing_tool(**kwargs):
+        raise RuntimeError("sensitive infrastructure detail")
+
+    result = orchestrator._run_read_only_tool(
+        failing_tool,
+        "MLflow provenance",
+    )
+
+    assert result.status == "unavailable"
+    assert result.error == (
+        "MLflow provenance check could not complete: RuntimeError"
+    )
+    assert "sensitive infrastructure detail" not in result.error
+    assert result.duration_ms is not None
+    assert result.duration_ms >= 0
+
+
+def test_run_diagnostics_continues_after_provenance_exception(monkeypatch):
+    checked_at = orchestrator.datetime(2026, 11, 15, tzinfo=orchestrator.UTC)
+    calls = []
+
+    model_result = ToolResult(
+        status="success",
+        data={
+            "selected_run": {
+                "run_id": "run-123",
+                "metrics": {"f1": 0.93},
+            }
+        },
+        checked_at=checked_at,
+    )
+
+    def mock_tool(name, response):
+        def execute(**kwargs):
+            calls.append(name)
+            return response
+
+        return execute
+
+    def fail_provenance(**kwargs):
+        calls.append("provenance")
+        raise RuntimeError("sensitive infrastructure detail")
+
+    def check_inference():
+        calls.append("inference")
+        return ToolResult(
+            status="success",
+            data={"health": "alive", "readiness": "ready"},
+            checked_at=checked_at,
+        )
+
+    monkeypatch.setattr(
+        orchestrator,
+        "select_best_recent_model",
+        lambda now=None: model_result,
+    )
+    monkeypatch.setattr(
+        orchestrator, "get_run_dataset_provenance", fail_provenance
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "check_dataset_changes",
+        mock_tool(
+            "dvc",
+            {
+                "success": True,
+                "local_status": {
+                    "success": True,
+                    "output": "Data and pipelines are up to date.",
+                },
+                "remote_status": {
+                    "success": True,
+                    "output": "Cache and remote 'localstorage' are in sync.",
+                },
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "list_dag_runs",
+        mock_tool(
+            "airflow",
+            {
+                "success": True,
+                "dag_runs": [{"state": "success"}],
+                "total_entries": 1,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "get_deployment_details",
+        mock_tool(
+            "deployment",
+            {
+                "success": True,
+                "data": {
+                    "desired_replicas": 2,
+                    "available_replicas": 2,
+                },
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "list_pods",
+        mock_tool(
+            "pods",
+            {
+                "success": True,
+                "count": 2,
+                "data": [
+                    {"name": "inference-pod-1", "ready": True},
+                    {"name": "inference-pod-2", "ready": True},
+                ],
+                "continue_token": None,
+            },
+        ),
+    )
+    monkeypatch.setattr(orchestrator, "check_inference_api", check_inference)
+
+    report = orchestrator.run_diagnostics(now=checked_at)
+
+    assert report.overall_status == "partial"
+    assert report.model_selection.status == "success"
+    assert report.training_provenance.status == "unavailable"
+    assert report.training_provenance.error == (
+        "MLflow provenance check could not complete: RuntimeError"
+    )
+    assert "sensitive infrastructure detail" not in (
+        report.training_provenance.error
+    )
+    assert report.dataset_state.status == "success"
+    assert report.airflow.status == "success"
+    assert report.kubernetes.status == "success"
+    assert report.inference_api.status == "success"
+    assert calls == [
+        "provenance",
+        "dvc",
+        "airflow",
+        "deployment",
+        "pods",
+        "inference",
+    ]
+
+
+def test_tool_response_result_sanitizes_failed_response():
+    sensitive_detail = "sensitive infrastructure detail"
+
+    result = orchestrator._tool_response_result(
+        {
+            "success": False,
+            "error": sensitive_detail,
+            "debug": sensitive_detail,
+        },
+        "MLflow",
+    )
+
+    serialized = result.model_dump(mode="json")
+
+    assert result.status == "failed"
+    assert result.data is None
+    assert result.error == "MLflow operation failed"
+    assert sensitive_detail not in str(serialized)
+
+
+def test_tool_response_result_preserves_successful_response():
+    response = {
+        "success": True,
+        "data": {"run_id": "example-run"},
+    }
+
+    result = orchestrator._tool_response_result(response, "MLflow")
+
+    assert result.status == "success"
+    assert result.data == response
+    assert result.error is None
+
+def test_tool_response_result_sanitizes_malformed_response():
+    result = orchestrator._tool_response_result(
+        {"success": "not-a-boolean", "debug": "sensitive detail"},
+        "Airflow",
+    )
+
+    assert result.status == "failed"
+    assert result.data is None
+    assert result.error == "Airflow returned a malformed response"
+    assert "sensitive detail" not in str(result.model_dump(mode="json"))
+
+
+
+
+
+def test_tool_response_result_sanitizes_nested_dvc_failure():
+    sensitive_detail = "private DVC command output"
+
+    result = orchestrator._tool_response_result(
+        {
+            "success": False,
+            "local_status": {
+                "success": True,
+                "output": "Data and pipelines are up to date.",
+            },
+            "remote_status": {
+                "success": False,
+                "error": sensitive_detail,
+            },
+        },
+        "DVC dataset state",
+    )
+
+    assert result.status == "failed"
+    assert result.data is None
+    assert result.error == "DVC dataset state operation failed"
+    assert sensitive_detail not in str(result.model_dump(mode="json"))
+
+
+def test_run_diagnostics_discards_malformed_airflow_history(monkeypatch):
+    checked_at = orchestrator.datetime(2026, 11, 15, tzinfo=orchestrator.UTC)
+    sensitive_detail = "unexpected private Airflow response"
+
+    monkeypatch.setattr(
+        orchestrator,
+        "select_best_recent_model",
+        lambda now=None: ToolResult(
+            status="unavailable",
+            error="No qualifying recent model",
+            checked_at=checked_at,
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "check_dataset_changes",
+        lambda: {
+            "success": True,
+            "local_status": {
+                "success": True,
+                "output": "Data and pipelines are up to date.",
+            },
+            "remote_status": {
+                "success": True,
+                "output": "Cache and remote 'localstorage' are in sync.",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "list_dag_runs",
+        lambda **kwargs: {
+            "success": True,
+            "dag_runs": {"unexpected": sensitive_detail},
+        },
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "get_deployment_details",
+        lambda **kwargs: {
+            "success": True,
+            "data": {"desired_replicas": 2, "available_replicas": 2},
+        },
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "list_pods",
+        lambda **kwargs: {
+            "success": True,
+            "data": [{"ready": True}, {"ready": True}],
+        },
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "check_inference_api",
+        lambda: ToolResult(
+            status="success",
+            data={"health": "alive", "readiness": "ready"},
+            checked_at=checked_at,
+        ),
+    )
+
+    report = orchestrator.run_diagnostics(now=checked_at)
+    serialized = report.model_dump_json()
+
+    assert report.airflow.status == "partial"
+    assert report.airflow.data is None
+    assert report.airflow.error == "Airflow returned an invalid DAG-run history."
+    assert sensitive_detail not in serialized
+    assert report.dataset_state.status == "success"
+    assert report.kubernetes.status == "success"
+    assert report.inference_api.status == "success"
+
+def test_run_diagnostics_sanitizes_kubernetes_partial_and_total_failures(
+    monkeypatch,
+):
+    checked_at = orchestrator.datetime(2026, 11, 15, tzinfo=orchestrator.UTC)
+
+    monkeypatch.setattr(
+        orchestrator,
+        "select_best_recent_model",
+        lambda now=None: ToolResult(
+            status="unavailable",
+            error="No qualifying recent model",
+            checked_at=checked_at,
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "check_dataset_changes",
+        lambda: {
+            "success": True,
+            "local_status": {
+                "success": True,
+                "output": "Data and pipelines are up to date.",
+            },
+            "remote_status": {
+                "success": True,
+                "output": "Cache and remote 'localstorage' are in sync.",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "list_dag_runs",
+        lambda **kwargs: {
+            "success": True,
+            "dag_runs": [{"state": "success"}],
+            "total_entries": 1,
+        },
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "check_inference_api",
+        lambda: ToolResult(
+            status="success",
+            data={"health": "alive", "readiness": "ready"},
+            checked_at=checked_at,
+        ),
+    )
+
+    scenarios = [
+        (
+            {
+                "success": True,
+                "data": {
+                    "desired_replicas": 2,
+                    "available_replicas": 2,
+                },
+            },
+            {
+                "success": False,
+                "error": "private pod response details",
+            },
+            "partial",
+        ),
+        (
+            {
+                "success": False,
+                "error": "private deployment response details",
+            },
+            {
+                "success": True,
+                "count": 2,
+                "data": [
+                    {"name": "pod-1", "ready": True},
+                    {"name": "pod-2", "ready": True},
+                ],
+                "continue_token": None,
+            },
+            "partial",
+        ),
+        (
+            {
+                "success": False,
+                "error": "private deployment response details",
+            },
+            {
+                "success": False,
+                "error": "private pod response details",
+            },
+            "unavailable",
+        ),
+    ]
+
+    for deployment_response, pods_response, expected_status in scenarios:
+        monkeypatch.setattr(
+            orchestrator,
+            "get_deployment_details",
+            lambda deployment_response=deployment_response, **kwargs: deployment_response,
+        )
+        monkeypatch.setattr(
+            orchestrator,
+            "list_pods",
+            lambda pods_response=pods_response, **kwargs: pods_response,
+        )
+
+        report = orchestrator.run_diagnostics(now=checked_at)
+        serialized = report.model_dump_json()
+
+        assert report.kubernetes.status == expected_status
+        assert "private deployment response details" not in serialized
+        assert "private pod response details" not in serialized
+        assert report.inference_api.status == "success"
