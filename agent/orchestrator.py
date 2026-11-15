@@ -231,7 +231,13 @@ def select_best_recent_model(
             continue
 
         metrics = run.get("metrics")
-        f1_score = metrics.get("f1") if isinstance(metrics, dict) else None
+        if isinstance(metrics, dict):
+            # Prefer the cross-validation metric logged by the training pipeline.
+            # Retain "f1" as a fallback for older MLflow runs.
+            metric_key = "cv_f1_mean" if "cv_f1_mean" in metrics else "f1"
+            f1_score = metrics.get(metric_key)
+        else:
+            f1_score = None
 
         if (
             isinstance(f1_score, bool)
@@ -264,7 +270,7 @@ def select_best_recent_model(
 
     selection_metadata = {
         "experiment_name": MODEL_SELECTION_EXPERIMENT,
-        "metric": "f1",
+        "metric": "cv_f1_mean (fallback: f1)",
         "recency_days": MODEL_SELECTION_RECENCY_DAYS,
         "max_runs_examined": MODEL_SELECTION_MAX_RUNS,
         "runs_examined": len(runs),
@@ -651,8 +657,7 @@ def run_diagnostics(now: datetime | None = None) -> DiagnosticReport:
             )
 
     if model_selection.status == "success" and isinstance(selected_run, dict):
-        metrics = selected_run.get("metrics", {})
-        f1_score = metrics.get("f1") if isinstance(metrics, dict) else None
+        f1_score = selected_run.get("f1")
         findings.append(
             DiagnosticFinding(
                 severity="info",

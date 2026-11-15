@@ -190,6 +190,49 @@ def test_select_best_recent_model_uses_highest_f1(monkeypatch):
     )
 
 
+def test_select_best_recent_model_prefers_cv_f1_mean(monkeypatch):
+    now = fixed_reference_time()
+    recent = int((now - timedelta(days=2)).timestamp() * 1000)
+
+    cv_run = make_run("cv-run", 0.80, recent)
+    cv_run["metrics"] = {"cv_f1_mean": 0.94, "f1": 0.70}
+
+    legacy_run = make_run("legacy-run", 0.90, recent)
+
+    patch_run_listing(
+        monkeypatch,
+        {"success": True, "runs": [legacy_run, cv_run]},
+    )
+
+    result = select_best_recent_model(now=now)
+
+    assert result.status == "success"
+    assert result.data["selected_run"]["run_id"] == "cv-run"
+    assert result.data["selected_run"]["f1"] == 0.94
+    assert result.data["metric"] == "cv_f1_mean (fallback: f1)"
+
+
+def test_select_best_recent_model_rejects_invalid_cv_f1_mean(
+    monkeypatch,
+):
+    now = fixed_reference_time()
+    recent = int((now - timedelta(days=2)).timestamp() * 1000)
+
+    invalid_cv_run = make_run("invalid-cv-run", 0.99, recent)
+    invalid_cv_run["metrics"] = {"cv_f1_mean": "0.95", "f1": 0.99}
+
+    patch_run_listing(
+        monkeypatch,
+        {"success": True, "runs": [invalid_cv_run]},
+    )
+
+    result = select_best_recent_model(now=now)
+
+    assert result.status == "unavailable"
+    assert result.data["selected_run"] is None
+    assert result.data["excluded_runs"]["missing_or_invalid_f1"] == 1
+
+
 def test_select_best_recent_model_uses_newest_run_for_f1_tie(monkeypatch):
     now = fixed_reference_time()
     older = int((now - timedelta(days=5)).timestamp() * 1000)
